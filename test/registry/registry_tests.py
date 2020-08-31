@@ -835,10 +835,11 @@ def test_image_replication(
             credentials=credentials,
         )
 
-        # Ensure that entries were created for each image.
-        for image_id in list(result.image_ids.values()):
-            r = registry_server_executor.on(liveserver).get_storage_replication_entry(image_id)
-            assert r.text == "OK"
+        # Ensure that entries were created for each layer.
+        r = registry_server_executor.on(liveserver).verify_replication_for(
+            "devtable", "newrepo", "latest"
+        )
+        assert r.text == "OK"
 
 
 def test_image_replication_empty_layers(
@@ -872,10 +873,11 @@ def test_image_replication_empty_layers(
             credentials=credentials,
         )
 
-        # Ensure that entries were created for each image.
-        for image_id in list(result.image_ids.values()):
-            r = registry_server_executor.on(liveserver).get_storage_replication_entry(image_id)
-            assert r.text == "OK"
+        # Ensure that entries were created for each layer.
+        r = registry_server_executor.on(liveserver).verify_replication_for(
+            "devtable", "newrepo", "latest"
+        )
+        assert r.text == "OK"
 
 
 @pytest.mark.parametrize(
@@ -1615,333 +1617,6 @@ def test_tags_disabled_namespace(
     )
 
 
-def test_squashed_image_disabled_namespace(
-    pusher, sized_images, liveserver_session, liveserver, registry_server_executor, app_reloader
-):
-    """ Test: Attempting to pull a squashed image from a disabled namespace. """
-    credentials = ("devtable", "password")
-
-    # Push an image to download.
-    pusher.push(
-        liveserver_session, "buynlarge", "newrepo", "latest", sized_images, credentials=credentials
-    )
-
-    # Disable the buynlarge namespace.
-    registry_server_executor.on(liveserver).disable_namespace("buynlarge")
-
-    # Attempt to pull the squashed version.
-    response = liveserver_session.get("/c1/squash/buynlarge/newrepo/latest", auth=credentials)
-    assert response.status_code == 400
-
-
-def test_squashed_image_disabled_user(
-    pusher, sized_images, liveserver_session, liveserver, registry_server_executor, app_reloader
-):
-    """ Test: Attempting to pull a squashed image via a disabled user. """
-    credentials = ("devtable", "password")
-
-    # Push an image to download.
-    pusher.push(
-        liveserver_session, "buynlarge", "newrepo", "latest", sized_images, credentials=credentials
-    )
-
-    # Disable the devtable namespace.
-    registry_server_executor.on(liveserver).disable_namespace("devtable")
-
-    # Attempt to pull the squashed version.
-    response = liveserver_session.get("/c1/squash/buynlarge/newrepo/latest", auth=credentials)
-    assert response.status_code == 403
-
-
-@pytest.mark.parametrize("use_estimates", [False, True,])
-def test_multilayer_squashed_images(
-    use_estimates,
-    pusher,
-    multi_layer_images,
-    liveserver_session,
-    liveserver,
-    registry_server_executor,
-    app_reloader,
-):
-    """ Test: Pulling of multilayer, complex squashed images. """
-    credentials = ("devtable", "password")
-
-    # Push an image to download.
-    pusher.push(
-        liveserver_session,
-        "devtable",
-        "newrepo",
-        "latest",
-        multi_layer_images,
-        credentials=credentials,
-    )
-
-    if use_estimates:
-        # Clear the uncompressed size stored for the images, to ensure that we estimate instead.
-        for image in multi_layer_images:
-            registry_server_executor.on(liveserver).clear_uncompressed_size(image.id)
-
-    # Pull the squashed version.
-    response = liveserver_session.get("/c1/squash/devtable/newrepo/latest", auth=credentials)
-    assert response.status_code == 200
-
-    tar = tarfile.open(fileobj=BytesIO(response.content))
-
-    # Verify the squashed image.
-    expected_image_id = next(
-        (name for name in tar.getnames() if not "/" in name and name != "repositories")
-    )
-    expected_names = [
-        "repositories",
-        expected_image_id,
-        "%s/json" % expected_image_id,
-        "%s/VERSION" % expected_image_id,
-        "%s/layer.tar" % expected_image_id,
-    ]
-
-    assert tar.getnames() == expected_names
-
-    # Verify the JSON image data.
-    json_data = tar.extractfile(tar.getmember("%s/json" % expected_image_id)).read()
-
-    # Ensure the JSON loads and parses.
-    result = json.loads(json_data)
-    assert result["id"] == expected_image_id
-    assert result["config"]["internal_id"] == "layer5"
-
-    # Ensure that squashed layer tar can be opened.
-    tar = tarfile.open(fileobj=tar.extractfile(tar.getmember("%s/layer.tar" % expected_image_id)))
-    assert set(tar.getnames()) == {"contents", "file1", "file2", "file3", "file4"}
-
-    # Check the contents of various files.
-    assert tar.extractfile("contents").read() == b"layer 5 contents"
-    assert tar.extractfile("file1").read() == b"from-layer-3"
-    assert tar.extractfile("file2").read() == b"from-layer-2"
-    assert tar.extractfile("file3").read() == b"from-layer-4"
-    assert tar.extractfile("file4").read() == b"from-layer-5"
-
-
-@pytest.mark.parametrize("use_estimates", [False, True,])
-@pytest.mark.parametrize("is_readonly", [False, True,])
-def test_squashed_images(
-    use_estimates,
-    pusher,
-    sized_images,
-    liveserver_session,
-    is_readonly,
-    liveserver,
-    registry_server_executor,
-    app_reloader,
-):
-    """ Test: Pulling of squashed images. """
-    credentials = ("devtable", "password")
-
-    # Push an image to download.
-    pusher.push(
-        liveserver_session, "devtable", "newrepo", "latest", sized_images, credentials=credentials
-    )
-
-    if use_estimates:
-        # Clear the uncompressed size stored for the images, to ensure that we estimate instead.
-        for image in sized_images:
-            registry_server_executor.on(liveserver).clear_uncompressed_size(image.id)
-
-    # Pull the squashed version.
-    with ConfigChange(
-        "REGISTRY_STATE",
-        "readonly" if is_readonly else "normal",
-        registry_server_executor.on(liveserver),
-        liveserver,
-    ):
-        response = liveserver_session.get("/c1/squash/devtable/newrepo/latest", auth=credentials)
-        assert response.status_code == 200
-
-        tar = tarfile.open(fileobj=BytesIO(response.content))
-
-        # Verify the squashed image.
-        expected_image_id = next(
-            (name for name in tar.getnames() if not "/" in name and name != "repositories")
-        )
-        expected_names = [
-            "repositories",
-            expected_image_id,
-            "%s/json" % expected_image_id,
-            "%s/VERSION" % expected_image_id,
-            "%s/layer.tar" % expected_image_id,
-        ]
-
-        assert tar.getnames() == expected_names
-
-        # Verify the JSON image data.
-        json_data = tar.extractfile(tar.getmember("%s/json" % expected_image_id)).read()
-
-        # Ensure the JSON loads and parses.
-        result = json.loads(json_data)
-        assert result["id"] == expected_image_id
-        assert result["config"]["foo"] == "childbar"
-
-        # Ensure that squashed layer tar can be opened.
-        tar = tarfile.open(
-            fileobj=tar.extractfile(tar.getmember("%s/layer.tar" % expected_image_id))
-        )
-        assert tar.getnames() == ["contents"]
-
-        # Check the contents.
-        assert tar.extractfile("contents").read() == b"some contents"
-
-
-EXPECTED_ACI_MANIFEST = {
-    "acKind": "ImageManifest",
-    "app": {
-        "environment": [],
-        "mountPoints": [],
-        "group": "root",
-        "user": "root",
-        "workingDirectory": "/",
-        "exec": ["/bin/sh", "-c", '""hello""'],
-        "isolators": [],
-        "eventHandlers": [],
-        "ports": [],
-        "annotations": [
-            {"name": "created", "value": "2018-04-03T18:37:09.284840891Z"},
-            {"name": "homepage", "value": "http://localhost:5000/devtable/newrepo:latest"},
-            {"name": "quay.io/derived-image", "value": "DERIVED_IMAGE_ID"},
-        ],
-    },
-    "labels": [
-        {"name": "version", "value": "latest"},
-        {"name": "arch", "value": "amd64"},
-        {"name": "os", "value": "linux"},
-    ],
-    "acVersion": "0.6.1",
-    "name": "localhost/devtable/newrepo",
-}
-
-
-@pytest.mark.parametrize("is_readonly", [False, True,])
-def test_aci_conversion(
-    pusher,
-    sized_images,
-    liveserver_session,
-    is_readonly,
-    liveserver,
-    registry_server_executor,
-    app_reloader,
-):
-    """ Test: Pulling of ACI converted images. """
-    credentials = ("devtable", "password")
-
-    # Push an image to download.
-    pusher.push(
-        liveserver_session, "devtable", "newrepo", "latest", sized_images, credentials=credentials
-    )
-
-    # Pull the ACI version.
-    with ConfigChange(
-        "REGISTRY_STATE",
-        "readonly" if is_readonly else "normal",
-        registry_server_executor.on(liveserver),
-        liveserver,
-    ):
-        response = liveserver_session.get(
-            "/c1/aci/server_name/devtable/newrepo/latest/aci/linux/amd64", auth=credentials
-        )
-        assert response.status_code == 200
-        tar = tarfile.open(fileobj=BytesIO(response.content))
-        assert set(tar.getnames()) == {"manifest", "rootfs", "rootfs/contents"}
-
-        assert tar.extractfile("rootfs/contents").read() == b"some contents"
-        loaded = json.loads(tar.extractfile("manifest").read())
-        for annotation in loaded["app"]["annotations"]:
-            if annotation["name"] == "quay.io/derived-image":
-                annotation["value"] = "DERIVED_IMAGE_ID"
-
-        assert loaded == EXPECTED_ACI_MANIFEST
-
-    if not is_readonly:
-        # Wait for the ACI signature to be written.
-        time.sleep(1)
-
-        # Pull the ACI signature.
-        response = liveserver_session.get(
-            "/c1/aci/server_name/devtable/newrepo/latest/aci.asc/linux/amd64", auth=credentials
-        )
-        assert response.status_code == 200
-
-
-@pytest.mark.parametrize("schema_version", [1, 2,])
-def test_aci_conversion_manifest_list(
-    v22_protocol,
-    sized_images,
-    different_images,
-    liveserver_session,
-    data_model,
-    liveserver,
-    registry_server_executor,
-    app_reloader,
-    schema_version,
-):
-    """ Test: Pulling of ACI converted image from a manifest list. """
-    credentials = ("devtable", "password")
-    options = ProtocolOptions()
-
-    # Build the manifests that will go in the list.
-    blobs = {}
-
-    signed = v22_protocol.build_schema1(
-        "devtable", "newrepo", "latest", sized_images, blobs, options, arch="amd64"
-    )
-    first_manifest = signed.unsigned()
-    if schema_version == 2:
-        first_manifest = v22_protocol.build_schema2(sized_images, blobs, options)
-
-    second_manifest = v22_protocol.build_schema2(different_images, blobs, options)
-
-    # Create and push the manifest list.
-    builder = DockerSchema2ManifestListBuilder()
-    builder.add_manifest(first_manifest, "amd64", "linux")
-    builder.add_manifest(second_manifest, "arm", "linux")
-    manifestlist = builder.build()
-
-    v22_protocol.push_list(
-        liveserver_session,
-        "devtable",
-        "newrepo",
-        "latest",
-        manifestlist,
-        [first_manifest, second_manifest],
-        blobs,
-        credentials=credentials,
-        options=options,
-    )
-
-    # Pull the ACI version.
-    response = liveserver_session.get(
-        "/c1/aci/server_name/devtable/newrepo/latest/aci/linux/amd64", auth=credentials
-    )
-    assert response.status_code == 200
-    tar = tarfile.open(fileobj=BytesIO(response.content))
-    assert set(tar.getnames()) == {"manifest", "rootfs", "rootfs/contents"}
-
-    assert tar.extractfile("rootfs/contents").read() == b"some contents"
-
-    loaded = json.loads(tar.extractfile("manifest").read())
-    for annotation in loaded["app"]["annotations"]:
-        if annotation["name"] == "quay.io/derived-image":
-            annotation["value"] = "DERIVED_IMAGE_ID"
-
-    assert loaded == EXPECTED_ACI_MANIFEST
-
-    # Wait for the ACI signature to be written.
-    time.sleep(1)
-
-    # Pull the ACI signature.
-    response = liveserver_session.get(
-        "/c1/aci/server_name/devtable/newrepo/latest/aci.asc/linux/amd64", auth=credentials
-    )
-    assert response.status_code == 200
-
-
 @pytest.mark.parametrize(
     "push_user, push_namespace, push_repo, mount_repo_name, expected_failure",
     [
@@ -2323,10 +1998,8 @@ def test_push_pull_same_blobs(pusher, puller, liveserver_session, app_reloader):
     )
 
 
-def test_push_tag_existing_image(
-    v1_protocol, puller, basic_images, liveserver_session, app_reloader
-):
-    """ Test: Push a new tag on an existing manifest/image. """
+def test_push_tag_existing_image(v1_protocol, basic_images, liveserver_session, app_reloader):
+    """ Test: Push a new tag on an existing image. """
     credentials = ("devtable", "password")
 
     # Push a new repository.
@@ -2334,18 +2007,24 @@ def test_push_tag_existing_image(
         liveserver_session, "devtable", "newrepo", "latest", basic_images, credentials=credentials
     )
 
-    # Push the same image/manifest to another tag in the repository.
+    # Pull the repository to verify.
+    pulled = v1_protocol.pull(
+        liveserver_session, "devtable", "newrepo", "latest", basic_images, credentials=credentials,
+    )
+    assert pulled.image_ids
+
+    # Push the same image to another tag in the repository.
     v1_protocol.tag(
         liveserver_session,
         "devtable",
         "newrepo",
         "anothertag",
-        basic_images[-1],
+        pulled.image_ids["latest"],
         credentials=credentials,
     )
 
     # Pull the repository to verify.
-    puller.pull(
+    v1_protocol.pull(
         liveserver_session,
         "devtable",
         "newrepo",
@@ -2653,131 +2332,6 @@ def test_push_pull_manifest_list_duplicate_manifest(
         credentials=credentials,
         options=options,
     )
-
-
-def test_squashed_images_empty_layer(
-    pusher,
-    images_with_empty_layer,
-    liveserver_session,
-    liveserver,
-    registry_server_executor,
-    app_reloader,
-):
-    """ Test: Pulling of squashed images for a manifest with empty layers. """
-    credentials = ("devtable", "password")
-
-    # Push an image to download.
-    pusher.push(
-        liveserver_session,
-        "devtable",
-        "newrepo",
-        "latest",
-        images_with_empty_layer,
-        credentials=credentials,
-    )
-
-    # Pull the squashed version.
-    response = liveserver_session.get("/c1/squash/devtable/newrepo/latest", auth=credentials)
-    assert response.status_code == 200
-
-    tar = tarfile.open(fileobj=BytesIO(response.content))
-
-    # Verify the squashed image.
-    expected_image_id = next(
-        (name for name in tar.getnames() if not "/" in name and name != "repositories")
-    )
-    expected_names = [
-        "repositories",
-        expected_image_id,
-        "%s/json" % expected_image_id,
-        "%s/VERSION" % expected_image_id,
-        "%s/layer.tar" % expected_image_id,
-    ]
-
-    assert tar.getnames() == expected_names
-
-
-def test_squashed_image_unsupported(
-    v22_protocol, basic_images, liveserver_session, liveserver, app_reloader, data_model
-):
-    """ Test: Attempting to pull a squashed image for a manifest list without an amd64+linux entry.
-  """
-    credentials = ("devtable", "password")
-    options = ProtocolOptions()
-
-    # Build the manifest that will go in the list.
-    blobs = {}
-    manifest = v22_protocol.build_schema2(basic_images, blobs, options)
-
-    # Create and push the manifest list.
-    builder = DockerSchema2ManifestListBuilder()
-    builder.add_manifest(manifest, "foobar", "someos")
-    manifestlist = builder.build()
-
-    v22_protocol.push_list(
-        liveserver_session,
-        "devtable",
-        "newrepo",
-        "latest",
-        manifestlist,
-        [manifest],
-        blobs,
-        credentials=credentials,
-        options=options,
-    )
-
-    # Attempt to pull the squashed version.
-    response = liveserver_session.get("/c1/squash/devtable/newrepo/latest", auth=credentials)
-    assert response.status_code == 404
-
-
-def test_squashed_image_manifest_list(
-    v22_protocol, basic_images, liveserver_session, liveserver, app_reloader, data_model
-):
-    """ Test: Pull a squashed image for a manifest list with an amd64+linux entry.
-  """
-    credentials = ("devtable", "password")
-    options = ProtocolOptions()
-
-    # Build the manifest that will go in the list.
-    blobs = {}
-    manifest = v22_protocol.build_schema2(basic_images, blobs, options)
-
-    # Create and push the manifest list.
-    builder = DockerSchema2ManifestListBuilder()
-    builder.add_manifest(manifest, "amd64", "linux")
-    manifestlist = builder.build()
-
-    v22_protocol.push_list(
-        liveserver_session,
-        "devtable",
-        "newrepo",
-        "latest",
-        manifestlist,
-        [manifest],
-        blobs,
-        credentials=credentials,
-        options=options,
-    )
-
-    # Pull the squashed version.
-    response = liveserver_session.get("/c1/squash/devtable/newrepo/latest", auth=credentials)
-    assert response.status_code == 200
-
-    # Verify the squashed image.
-    tar = tarfile.open(fileobj=BytesIO(response.content))
-    expected_image_id = next(
-        (name for name in tar.getnames() if not "/" in name and name != "repositories")
-    )
-    expected_names = [
-        "repositories",
-        expected_image_id,
-        "%s/json" % expected_image_id,
-        "%s/VERSION" % expected_image_id,
-        "%s/layer.tar" % expected_image_id,
-    ]
-
-    assert tar.getnames() == expected_names
 
 
 def test_verify_schema2(
@@ -3144,39 +2698,26 @@ def test_attempt_pull_by_manifest_digest_for_deleted_tag(
 
 
 @pytest.mark.parametrize(
-    "state,         use_robot,   create_mirror,   robot_exists,  expected_failure",
+    "state, use_robot, create_mirror, expected_failure",
     [
-        ("NORMAL", True, True, True, None),
-        ("NORMAL", False, True, True, None),
-        ("NORMAL", True, True, False, Failures.INVALID_AUTHENTICATION),
-        ("NORMAL", False, True, False, None),
-        ("NORMAL", True, False, True, None),
-        ("NORMAL", False, False, True, None),
-        ("NORMAL", True, False, False, Failures.INVALID_AUTHENTICATION),
-        ("NORMAL", False, False, False, None),
-        ("READ_ONLY", True, True, True, Failures.READ_ONLY),
-        ("READ_ONLY", False, True, True, Failures.READ_ONLY),
-        ("READ_ONLY", True, True, False, Failures.INVALID_AUTHENTICATION),
-        ("READ_ONLY", False, True, False, Failures.READ_ONLY),
-        ("READ_ONLY", True, False, True, Failures.READ_ONLY),
-        ("READ_ONLY", False, False, True, Failures.READ_ONLY),
-        ("READ_ONLY", True, False, False, Failures.INVALID_AUTHENTICATION),
-        ("READ_ONLY", False, False, False, Failures.READ_ONLY),
-        ("MIRROR", True, True, True, None),
-        ("MIRROR", False, True, True, Failures.MIRROR_ONLY),
-        ("MIRROR", True, False, True, Failures.MIRROR_MISCONFIGURED),
-        ("MIRROR", False, False, True, Failures.MIRROR_MISCONFIGURED),
-        ("MIRROR", True, True, False, Failures.INVALID_AUTHENTICATION),
-        ("MIRROR", False, True, False, Failures.MIRROR_ROBOT_MISSING),
-        ("MIRROR", True, False, False, Failures.INVALID_AUTHENTICATION),
-        ("MIRROR", False, False, False, Failures.MIRROR_MISCONFIGURED),
+        ("NORMAL", True, True, None),
+        ("NORMAL", False, True, None),
+        ("NORMAL", True, False, None),
+        ("NORMAL", False, False, None),
+        ("READ_ONLY", True, True, Failures.READ_ONLY),
+        ("READ_ONLY", False, True, Failures.READ_ONLY),
+        ("READ_ONLY", True, False, Failures.READ_ONLY),
+        ("READ_ONLY", False, False, Failures.READ_ONLY),
+        ("MIRROR", True, True, None),
+        ("MIRROR", False, True, Failures.MIRROR_ONLY),
+        ("MIRROR", True, False, Failures.MIRROR_MISCONFIGURED),
+        ("MIRROR", False, False, Failures.MIRROR_MISCONFIGURED),
     ],
 )
 def test_repository_states(
     state,
     use_robot,
     create_mirror,
-    robot_exists,
     expected_failure,
     pusher,
     puller,
@@ -3252,10 +2793,9 @@ def test_repository_states(
     # Verify pulls/reads still work
     puller.pull(liveserver_session, namespace, repo, tag, basic_images, credentials=credentials)
 
-    # Verify the case where the robot user no longer exists
-    if not robot_exists:
-        resp = api_caller.delete("/api/v1/user/robots/%s" % robot)
-        assert resp
+    # Should not be able to delete a robot attached to a mirror
+    resp = api_caller.delete("/api/v1/user/robots/%s" % robot)
+    assert resp.status_code == 400
 
     # Verify that the Repository.state determines whether pushes/changes are allowed
     options = ProtocolOptions()

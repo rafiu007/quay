@@ -685,6 +685,7 @@ class User(BaseModel):
                     NamespaceGeoRestriction,
                     ManifestSecurityStatus,
                     RepoMirrorConfig,
+                    UploadedBlob,
                 }
                 | appr_classes
                 | v22_classes
@@ -888,6 +889,7 @@ class Repository(BaseModel):
                 RepoMirrorRule,
                 DeletedRepository,
                 ManifestSecurityStatus,
+                UploadedBlob,
             }
             | appr_classes
             | v22_classes
@@ -1115,6 +1117,7 @@ class Image(BaseModel):
         return list(map(int, self.ancestors.split("/")[1:-1]))
 
 
+@deprecated_model
 class DerivedStorageForImage(BaseModel):
     source_image = ForeignKeyField(Image)
     derivative = ForeignKeyField(ImageStorage)
@@ -1127,6 +1130,7 @@ class DerivedStorageForImage(BaseModel):
         indexes = ((("source_image", "transformation", "uniqueness_hash"), True),)
 
 
+@deprecated_model
 class RepositoryTag(BaseModel):
     name = CharField()
     image = ForeignKeyField(Image)
@@ -1391,8 +1395,8 @@ class ExternalNotificationMethod(BaseModel):
 class RepositoryNotification(BaseModel):
     uuid = CharField(default=uuid_generator, index=True)
     repository = ForeignKeyField(Repository)
-    event = ForeignKeyField(ExternalNotificationEvent)
-    method = ForeignKeyField(ExternalNotificationMethod)
+    event = EnumField(ExternalNotificationEvent)
+    method = EnumField(ExternalNotificationMethod)
     title = CharField(null=True)
     config_json = TextField()
     event_config_json = TextField(default="{}")
@@ -1412,6 +1416,19 @@ class RepositoryAuthorizedEmail(BaseModel):
             # create a unique index on email and repository
             (("email", "repository"), True),
         )
+
+
+class UploadedBlob(BaseModel):
+    """
+    UploadedBlob tracks a recently uploaded blob and prevents it from being GCed
+    while within the expiration window.
+    """
+
+    id = BigAutoField()
+    repository = ForeignKeyField(Repository)
+    blob = ForeignKeyField(ImageStorage)
+    uploaded_at = DateTimeField(default=datetime.utcnow)
+    expires_at = DateTimeField(index=True)
 
 
 class BlobUpload(BaseModel):
@@ -1699,12 +1716,16 @@ class Manifest(BaseModel):
     media_type = EnumField(MediaType)
     manifest_bytes = TextField()
 
+    config_media_type = CharField(null=True)
+    layers_compressed_size = BigIntegerField(null=True)
+
     class Meta:
         database = db
         read_only_config = read_only_config
         indexes = (
             (("repository", "digest"), True),
             (("repository", "media_type"), False),
+            (("repository", "config_media_type"), False),
         )
 
 
@@ -1920,9 +1941,7 @@ class RepoMirrorConfig(BaseModel):
 
     # Mirror Configuration
     mirror_type = ClientEnumField(RepoMirrorType, default=RepoMirrorType.PULL)
-    internal_robot = QuayUserField(
-        allows_robots=True, null=True, backref="mirrorpullrobot", robot_null_delete=True
-    )
+    internal_robot = QuayUserField(allows_robots=True, backref="mirrorpullrobot",)
     external_reference = CharField()
     external_registry_username = EncryptedCharField(max_length=2048, null=True)
     external_registry_password = EncryptedCharField(max_length=2048, null=True)

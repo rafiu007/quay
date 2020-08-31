@@ -507,6 +507,9 @@ def delete_robot(robot_username):
     except User.DoesNotExist:
         raise InvalidRobotException("Could not find robot with username: %s" % robot_username)
 
+    except IntegrityError:
+        DataModelException("Could not delete robot with username: %s" % robot_username)
+
 
 def list_namespace_robots(namespace):
     """
@@ -1326,7 +1329,11 @@ def get_region_locations(user):
     """
     Returns the locations defined as preferred storage for the given user.
     """
-    query = UserRegion.select().join(ImageStorageLocation).where(UserRegion.user == user)
+    query = (
+        UserRegion.select(UserRegion, ImageStorageLocation)
+        .join(ImageStorageLocation)
+        .where(UserRegion.user == user)
+    )
     return set([region.location.name for region in query])
 
 

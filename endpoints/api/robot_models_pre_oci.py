@@ -25,7 +25,7 @@ class RobotPreOCIModel(RobotInterface):
         return [
             Permission(
                 permission.repository.name,
-                permission.repository.visibility.name,
+                model.repository.repository_visibility_name(permission.repository),
                 permission.role.name,
             )
             for permission in permissions
@@ -177,6 +177,10 @@ class RobotPreOCIModel(RobotInterface):
             metadata.description,
             metadata.unstructured_json,
         )
+
+    def robot_has_mirror(self, robot_username):
+        robot = model.user.lookup_robot(robot_username)
+        return model.repo_mirror.robot_has_mirror(robot)
 
 
 pre_oci_model = RobotPreOCIModel()

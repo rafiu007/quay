@@ -468,8 +468,9 @@ class EphemeralBuilderManager(BaseManager):
             )
         except KeyError:
             logger.warning(
-                "Job: %s already exists in orchestrator, timeout may be misconfigured", build_uuid
+                "Job: %s already exists in orchestrator, timeout may be misconfigured. Removing key %s from Redis.", build_uuid, job_key
             )
+            await self._orchestrator.delete_key(job_key)
             return False, EPHEMERAL_API_TIMEOUT
         except OrchestratorConnectionError:
             logger.exception(
@@ -500,8 +501,8 @@ class EphemeralBuilderManager(BaseManager):
             # Check if we can use this executor based on the retries remaining.
             if executor.minimum_retry_threshold > build_job.retries_remaining:
                 build_fallback.labels(executor.name).inc()
-                logger.debug(
-                    "Job %s cannot use executor %s as it is below retry threshold %s (retry #%s)",
+                logger.warning(
+                    "Job %s cannot use executor %s as it is below retry threshold %s (retry #%s) - Falling back to next configured executor",
                     build_uuid,
                     executor.name,
                     executor.minimum_retry_threshold,

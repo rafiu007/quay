@@ -259,7 +259,6 @@ class DefaultConfig(ImmutableConfig):
     NOTIFICATION_QUEUE_NAME = "notification"
     DOCKERFILE_BUILD_QUEUE_NAME = "dockerfilebuild"
     REPLICATION_QUEUE_NAME = "imagestoragereplication"
-    SECSCAN_NOTIFICATION_QUEUE_NAME = "security_notification"
     CHUNK_CLEANUP_QUEUE_NAME = "chunk_cleanup"
     NAMESPACE_GC_QUEUE_NAME = "namespacegc"
     REPOSITORY_GC_QUEUE_NAME = "repositorygc"
@@ -475,9 +474,6 @@ class DefaultConfig(ImmutableConfig):
 
     # The version of the API to use for the security scanner.
     SECURITY_SCANNER_API_VERSION = "v1"
-
-    # Namespace whitelist for security scanner.
-    SECURITY_SCANNER_V4_NAMESPACE_WHITELIST = []
 
     # Minimum number of seconds before re-indexing a manifest with the security scanner.
     SECURITY_SCANNER_V4_REINDEX_THRESHOLD = 300
@@ -714,6 +710,9 @@ class DefaultConfig(ImmutableConfig):
     # The whitelist of namespaces whose app registry package list is cached for 1 hour.
     APP_REGISTRY_PACKAGE_LIST_CACHE_WHITELIST = []
 
+    # The whitelist of namespaces whose app registry show package is cached for 1 hour.
+    APP_REGISTRY_SHOW_PACKAGE_CACHE_WHITELIST = []
+
     # The maximum size of uploaded CNR layers.
     MAXIMUM_CNR_LAYER_SIZE = "2m"
 
@@ -736,3 +735,6 @@ class DefaultConfig(ImmutableConfig):
 
     # Feature Flag: Whether the repository action count worker is enabled.
     FEATURE_REPOSITORY_ACTION_COUNTER = True
+
+    # TEMP FEATURE: Backfill the sizes of manifests.
+    FEATURE_MANIFEST_SIZE_BACKFILL = True

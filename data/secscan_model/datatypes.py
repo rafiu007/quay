@@ -29,6 +29,9 @@ Vulnerability = namedtuple(
     "Vulnerability",
     ["Severity", "NamespaceName", "Link", "FixedBy", "Description", "Name", "Metadata"],
 )
+Metadata = namedtuple(
+    "Metadata", ["UpdatedBy", "RepoName", "RepoLink", "DistroName", "DistroVersion"]
+)
 Feature = namedtuple(
     "Feature", ["Name", "VersionFormat", "NamespaceName", "AddedBy", "Version", "Vulnerabilities"]
 )

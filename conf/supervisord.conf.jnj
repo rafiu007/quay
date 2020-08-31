@@ -44,7 +44,9 @@ stderr_events_enabled = true
 environment=
   PYTHONPATH=%(ENV_QUAYDIR)s
 command=python -m buildman.builder
-autostart = {{ config['builder']['autostart'] }}
+autostart = false
+; TODO (kleesc): Re-enable this eventually
+; autostart = {{ config['builder']['autostart'] }}
 stdout_events_enabled = true
 stderr_events_enabled = true
 
@@ -136,14 +138,6 @@ autostart = {{ config['repositoryactioncounter']['autostart'] }}
 stdout_events_enabled = true
 stderr_events_enabled = true
 
-[program:security_notification_worker]
-environment=
-  PYTHONPATH=%(ENV_QUAYDIR)s
-command=python -m workers.security_notification_worker
-autostart = {{ config['security_notification_worker']['autostart'] }}
-stdout_events_enabled = true
-stderr_events_enabled = true
-
 [program:securityworker]
 environment=
   PYTHONPATH=%(ENV_QUAYDIR)s
@@ -189,14 +183,6 @@ environment=
   PYTHONPATH=%(ENV_QUAYDIR)s
 command=gunicorn -c %(ENV_QUAYCONF)s/gunicorn_secscan.py secscan:application
 autostart = {{ config['gunicorn-secscan']['autostart'] }}
-stdout_events_enabled = true
-stderr_events_enabled = true
-
-[program:gunicorn-verbs]
-environment=
-  PYTHONPATH=%(ENV_QUAYDIR)s
-command=nice -n 10 gunicorn -c %(ENV_QUAYCONF)s/gunicorn_verbs.py verbs:application
-autostart = {{ config['gunicorn-verbs']['autostart'] }}
 stdout_events_enabled = true
 stderr_events_enabled = true
 

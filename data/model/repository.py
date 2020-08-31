@@ -32,7 +32,6 @@ from data.database import (
     RepositoryActionCount,
     Role,
     RepositoryAuthorizedEmail,
-    DerivedStorageForImage,
     Label,
     db_for_update,
     get_epoch_timestamp,
@@ -74,6 +73,11 @@ def get_min_id():
     return Repository.select(fn.Min(Repository.id)).scalar()
 
 
+def get_repository_count():
+    """ Returns the count of repositories. """
+    return Repository.select().count()
+
+
 def get_repo_kind_name(repo):
     return Repository.kind.get_name(repo.kind_id)
 
@@ -86,47 +90,57 @@ def get_public_repo_visibility():
     return _basequery.get_public_repo_visibility()
 
 
+class _RepositoryExistsException(Exception):
+    """ Exception raised if a repository exists in create_repository. Used to breakout of
+        the transaction.
+    """
+
+    def __init__(self, internal_exception):
+        self.internal_exception = internal_exception
+
+
 def create_repository(
     namespace, name, creating_user, visibility="private", repo_kind="image", description=None
 ):
     namespace_user = User.get(username=namespace)
     yesterday = datetime.now() - timedelta(days=1)
 
-    with db_transaction():
-        # Check if the repository exists to avoid an IntegrityError if possible.
-        existing = get_repository(namespace, name)
-        if existing is not None:
-            return None
+    try:
+        with db_transaction():
+            # Check if the repository exists to avoid an IntegrityError if possible.
+            existing = get_repository(namespace, name)
+            if existing is not None:
+                return None
 
-        try:
-            repo = Repository.create(
-                name=name,
-                visibility=Repository.visibility.get_id(visibility),
-                namespace_user=namespace_user,
-                kind=Repository.kind.get_id(repo_kind),
-                description=description,
-            )
-        except IntegrityError as ie:
-            # NOTE: This is a just-in-case fallback.
             try:
-                Repository.get(namespace_user=namespace_user, name=name)
-                return None
-            except Repository.DoesNotExist:
-                logger.error(
-                    "Got integrity error when trying to create repository %s/%s: %s",
-                    namespace,
-                    name,
-                    ie,
+                repo = Repository.create(
+                    name=name,
+                    visibility=Repository.visibility.get_id(visibility),
+                    namespace_user=namespace_user,
+                    kind=Repository.kind.get_id(repo_kind),
+                    description=description,
                 )
-                return None
+            except IntegrityError as ie:
+                raise _RepositoryExistsException(ie)
 
-        RepositoryActionCount.create(repository=repo, count=0, date=yesterday)
-        RepositorySearchScore.create(repository=repo, score=0)
+            RepositoryActionCount.create(repository=repo, count=0, date=yesterday)
+            RepositorySearchScore.create(repository=repo, score=0)
 
-        # Note: We put the admin create permission under the transaction to ensure it is created.
-        if creating_user and not creating_user.organization:
-            admin = Role.get(name="admin")
-            RepositoryPermission.create(user=creating_user, repository=repo, role=admin)
+            # Note: We put the admin create permission under the transaction to ensure it is created.
+            if creating_user and not creating_user.organization:
+                admin = Role.get(name="admin")
+                RepositoryPermission.create(user=creating_user, repository=repo, role=admin)
+    except _RepositoryExistsException as ree:
+        try:
+            return Repository.get(namespace_user=namespace_user, name=name)
+        except Repository.DoesNotExist:
+            logger.error(
+                "Got integrity error when trying to create repository %s/%s: %s",
+                namespace,
+                name,
+                ree.internal_exception,
+            )
+            return None
 
     # Apply default permissions (only occurs for repositories under organizations)
     if creating_user and not creating_user.organization and creating_user.username != namespace:
@@ -493,6 +507,10 @@ def lookup_repository(repo_id):
         return Repository.get(Repository.id == repo_id)
     except Repository.DoesNotExist:
         return None
+
+
+def repository_visibility_name(repository):
+    return "public" if is_repository_public(repository) else "private"
 
 
 def is_repository_public(repository):

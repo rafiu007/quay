@@ -7,6 +7,7 @@ from collections import namedtuple
 
 logger = logging.getLogger(__name__)
 
+SKOPEO_TIMEOUT_SECONDS = 300
 
 # success: True or False whether call was successful
 # tags: list of tags or empty list
@@ -38,6 +39,7 @@ class SkopeoMirror(object):
             args = args + ["--debug"]
         args = args + [
             "copy",
+            "--all",
             "--src-tls-verify=%s" % src_tls_verify,
             "--dest-tls-verify=%s" % dest_tls_verify,
         ]
@@ -119,19 +121,14 @@ class SkopeoMirror(object):
             close_fds=True,
         )
 
-        # Poll process for new output until finished
-        stdout = ""
-        stderr = ""
-        while True:
-            stdout_nextline = job.stdout.readline()
-            stdout = stdout + stdout_nextline
-            stderr_nextline = job.stderr.readline()
-            stderr = stderr + stderr_nextline
-            if stdout_nextline == "" and stderr_nextline == "" and job.poll() is not None:
-                break
-            logger.debug("Skopeo [STDERR]: %s" % stderr_nextline)
-            logger.debug("Skopeo [STDOUT]: %s" % stdout_nextline)
-
-        job.communicate()
+        try:
+            (stdout, stderr) = job.communicate(timeout=SKOPEO_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            job.kill()
+            (stdout, stderr) = job.communicate()
+        stdout = stdout.decode("utf-8")
+        stderr = stderr.decode("utf-8")
+        logger.debug("Skopeo [STDERR]: %s" % stderr)
+        logger.debug("Skopeo [STDOUT]: %s" % stdout)
 
         return SkopeoResults(job.returncode == 0, [], stdout, stderr)
